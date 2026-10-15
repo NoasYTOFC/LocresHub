@@ -2503,6 +2503,7 @@ class _TranslationRowState extends State<_TranslationRow> {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
             width: widget.keyWidth,
@@ -2525,8 +2526,7 @@ class _TranslationRowState extends State<_TranslationRow> {
               message: entry.originalText,
               child: Text(
                 entry.originalText,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                softWrap: true,
                 style: originalStyle,
               ),
             ),
@@ -2537,7 +2537,8 @@ class _TranslationRowState extends State<_TranslationRow> {
               controller: _controller,
               focusNode: _focusNode,
               onChanged: (value) => widget.onChanged(entry, value),
-              maxLines: 1,
+              minLines: 2,
+              maxLines: null,
               style: originalStyle,
               decoration: const InputDecoration(
                 isDense: true,
