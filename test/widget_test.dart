@@ -201,7 +201,28 @@ void main() {
 
     expect(find.text('Importar CSVs na aba atual'), findsOneWidget);
     expect(find.text('Abrir CSV para edição...'), findsOneWidget);
+    expect(find.text('Abrir projeto online...'), findsOneWidget);
     expect(find.text('Merge Locres + CSVs...'), findsOneWidget);
+  });
+
+  testWidgets('online project dialog explains setup and accepts a sheet link', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(home: LocresHomePage(initialDocument: _sampleDocument())),
+    );
+
+    await tester.tap(find.byTooltip('CSV e merge'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Abrir projeto online...'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Conectar projeto online'), findsOneWidget);
+    expect(find.text('Prepare a planilha'), findsOneWidget);
+    expect(find.text('Compartilhe com a equipe'), findsOneWidget);
+    expect(find.text('Conecte e sincronize'), findsOneWidget);
+    expect(find.text('Link da planilha Google'), findsOneWidget);
+    expect(find.text('Conectar'), findsOneWidget);
   });
 
   testWidgets('a CSV tab displays editable rows without a Locres tab', (

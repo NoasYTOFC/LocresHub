@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 
 import 'locres_codec.dart';
 import 'locres_csv.dart';
+import 'online_sheet.dart';
 import 'workspace_store.dart';
 
 void main() {
@@ -480,6 +481,70 @@ class _LocresHomePageState extends State<LocresHomePage>
       );
     } finally {
       if (mounted) setState(() => _isOpening = false);
+    }
+  }
+
+  Future<void> _openOnlineProject() async {
+    if (_isCsvBusy || _isOpening || _isRestoring) return;
+    final input = await showDialog<String>(
+      context: context,
+      builder: (context) => const _OnlineProjectDialog(),
+    );
+    if (input == null || !mounted) return;
+    setState(() => _isCsvBusy = true);
+    try {
+      final url = OnlineSheet.parseUrl(input);
+      final existingIndex = _tabs.indexWhere(
+        (tab) => tab.isOnline && tab.path == url.toString(),
+      );
+      if (existingIndex >= 0) {
+        _switchTab(existingIndex);
+        return;
+      }
+      if (_tabs.length >= 5) {
+        _showMessage('O limite de cinco arquivos abertos já foi atingido.');
+        return;
+      }
+      final tab = await OnlineSheet.open(url);
+      if (!mounted) return;
+      tab.selectedNamespace = tab.document.entries.isEmpty
+          ? null
+          : tab.document.entries.first.namespace;
+      setState(() {
+        _tabs.add(tab);
+        _activeTab = tab;
+        _selectedNamespace = tab.selectedNamespace;
+        _clearSearches();
+      });
+      _scheduleWorkspaceSave();
+    } on OnlineSheetException catch (error) {
+      _showMessage('Não foi possível abrir o projeto online: $error');
+    } finally {
+      if (mounted) setState(() => _isCsvBusy = false);
+    }
+  }
+
+  Future<bool> _syncOnlineTab(LocresWorkspaceTab tab) async {
+    setState(() => _isSaving = true);
+    try {
+      final result = await OnlineSheet.sync(tab);
+      if (!mounted) return true;
+      final parts = <String>[
+        '${result.sent} linha(s) enviada(s)',
+        if (result.added > 0) '${result.added} nova(s) da planilha',
+        if (result.conflicts > 0)
+          '${result.conflicts} conflito(s): outra pessoa editou a mesma linha, valor dela mantido',
+        if (result.missing > 0)
+          '${result.missing} linha(s) não encontrada(s) na planilha',
+      ];
+      setState(() {});
+      _showMessage('Sincronizado: ${parts.join(', ')}.');
+      return true;
+    } on OnlineSheetException catch (error) {
+      _showMessage('Falha ao sincronizar: $error');
+      return false;
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
@@ -1009,6 +1074,10 @@ class _LocresHomePageState extends State<LocresHomePage>
   Future<void> _saveFile() async {
     final tab = _activeTab;
     if (tab == null || _isSaving) return;
+    if (tab.isOnline) {
+      await _syncOnlineTab(tab);
+      return;
+    }
     if (!tab.hasUnsavedChanges) {
       _showMessage('Nenhuma alteração para salvar.');
       return;
@@ -1017,6 +1086,7 @@ class _LocresHomePageState extends State<LocresHomePage>
   }
 
   Future<bool> _saveTab(LocresWorkspaceTab tab) async {
+    if (tab.isOnline) return _syncOnlineTab(tab);
     setState(() => _isSaving = true);
     try {
       final isCsv = tab.sourceType == WorkspaceSourceType.csv;
@@ -1253,7 +1323,7 @@ class _LocresHomePageState extends State<LocresHomePage>
                   number: '5',
                   title: 'Troque traduções por CSV',
                   description:
-                      'No menu CSV, exporte apenas os textos editados ou escolha conjuntos para criar uma planilha de edição. “Abrir CSV para edição” cria uma aba sem exigir um Locres; edite e salve de volta como CSV para devolver à equipe. Também é possível importar CSVs na aba ativa ou escolher outro Locres no merge.',
+                      'No menu CSV, exporte textos ou conjuntos para trocar traduções. “Abrir CSV para edição” cria uma aba sem exigir um Locres. “Abrir projeto online” conecta uma planilha do Google: cada integrante entra na própria conta e o Google respeita as permissões compartilhadas. Sincronize para enviar suas linhas editadas e baixar as atualizações.',
                 ),
                 SizedBox(height: 12),
                 Text(
@@ -1292,11 +1362,15 @@ class _LocresHomePageState extends State<LocresHomePage>
                     : '${activeTab.projectName} — ${activeTab.fileName}',
                 isDirty: activeTab?.hasUnsavedChanges ?? false,
                 isCsvTab: activeTab?.sourceType == WorkspaceSourceType.csv,
+                isOnlineTab: activeTab?.isOnline ?? false,
                 isSaving: _isSaving,
                 isBusy: _isOpening || _isRestoring || _isCsvBusy,
                 isCsvBusy: _isCsvBusy,
                 canOpen: true,
-                canSave: !_isCsvBusy && (activeTab?.hasUnsavedChanges ?? false),
+                canSave:
+                    !_isCsvBusy &&
+                    activeTab != null &&
+                    (activeTab.isOnline || activeTab.hasUnsavedChanges),
                 canExportEdited:
                     activeTab?.document.entries.any(
                       (entry) => entry.editedText != entry.originalText,
@@ -1313,6 +1387,7 @@ class _LocresHomePageState extends State<LocresHomePage>
                 onExportGroups: _exportSelectedGroupsCsv,
                 onImportCsv: _importCsvIntoActiveTab,
                 onOpenCsv: _openCsvForEditing,
+                onOpenOnline: _openOnlineProject,
                 onMergeCsv: _mergeCsvFiles,
                 onHelp: _showGuide,
               ),
@@ -1386,6 +1461,7 @@ class _TopBar extends StatelessWidget {
     required this.fileName,
     required this.isDirty,
     required this.isCsvTab,
+    required this.isOnlineTab,
     required this.isSaving,
     required this.isBusy,
     required this.isCsvBusy,
@@ -1402,6 +1478,7 @@ class _TopBar extends StatelessWidget {
     required this.onExportGroups,
     required this.onImportCsv,
     required this.onOpenCsv,
+    required this.onOpenOnline,
     required this.onMergeCsv,
     required this.onHelp,
   });
@@ -1409,6 +1486,7 @@ class _TopBar extends StatelessWidget {
   final String? fileName;
   final bool isDirty;
   final bool isCsvTab;
+  final bool isOnlineTab;
   final bool isSaving;
   final bool isBusy;
   final bool isCsvBusy;
@@ -1425,6 +1503,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onExportGroups;
   final VoidCallback onImportCsv;
   final VoidCallback onOpenCsv;
+  final VoidCallback onOpenOnline;
   final VoidCallback onMergeCsv;
   final VoidCallback onHelp;
 
@@ -1507,6 +1586,8 @@ class _TopBar extends StatelessWidget {
                   onImportCsv();
                 case 'openCsv':
                   onOpenCsv();
+                case 'openOnline':
+                  onOpenOnline();
                 case 'merge':
                   onMergeCsv();
               }
@@ -1549,6 +1630,15 @@ class _TopBar extends StatelessWidget {
                 ),
               ),
               PopupMenuItem(
+                value: 'openOnline',
+                enabled: !isBusy && !isCsvBusy,
+                child: const ListTile(
+                  dense: true,
+                  leading: Icon(Icons.cloud_outlined),
+                  title: Text('Abrir projeto online...'),
+                ),
+              ),
+              PopupMenuItem(
                 value: 'merge',
                 enabled: !isCsvBusy,
                 child: const ListTile(
@@ -1581,7 +1671,11 @@ class _TopBar extends StatelessWidget {
                   )
                 : const Icon(Icons.save_outlined, size: 18),
             label: Text(
-              isCsvTab ? 'Salvar CSV' : (isDirty ? 'Salvar cópia' : 'Salvar'),
+              isOnlineTab
+                  ? 'Sincronizar'
+                  : isCsvTab
+                  ? 'Salvar CSV'
+                  : (isDirty ? 'Salvar cópia' : 'Salvar'),
             ),
           ),
         ],
@@ -1652,6 +1746,176 @@ class _AliasEditDialogState extends State<_AliasEditDialog> {
           child: const Text('Salvar apelido'),
         ),
       ],
+    );
+  }
+}
+
+class _OnlineProjectDialog extends StatefulWidget {
+  const _OnlineProjectDialog();
+
+  @override
+  State<_OnlineProjectDialog> createState() => _OnlineProjectDialogState();
+}
+
+class _OnlineProjectDialogState extends State<_OnlineProjectDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return AlertDialog(
+      icon: Icon(Icons.cloud_sync_outlined, color: colors.primary),
+      title: const Text('Conectar projeto online'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'A equipe trabalha na mesma planilha. O Google controla quem '
+                'pode visualizar ou editar.',
+                style: TextStyle(color: colors.onSurfaceVariant, height: 1.4),
+              ),
+              const SizedBox(height: 20),
+              const _OnlineProjectStep(
+                number: '1',
+                title: 'Prepare a planilha',
+                description:
+                    'Exporte o Locres para CSV e importe-o na primeira aba. '
+                    'Mantenha os cabeçalhos e as colunas do LocresHub.',
+              ),
+              const _OnlineProjectStep(
+                number: '2',
+                title: 'Compartilhe com a equipe',
+                description:
+                    'Dê acesso de Editor às contas Google que devem poder '
+                    'alterar as traduções.',
+              ),
+              const _OnlineProjectStep(
+                number: '3',
+                title: 'Conecte e sincronize',
+                description:
+                    'Cole o link abaixo. Cada integrante entra na própria '
+                    'conta; use “Sincronizar” para enviar as edições e '
+                    'receber as atualizações.',
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _controller,
+                autofocus: true,
+                keyboardType: TextInputType.url,
+                textInputAction: TextInputAction.go,
+                decoration: const InputDecoration(
+                  labelText: 'Link da planilha Google',
+                  hintText: 'https://docs.google.com/spreadsheets/d/…',
+                  prefixIcon: Icon(Icons.link_rounded),
+                  border: OutlineInputBorder(),
+                ),
+                onSubmitted: (value) => Navigator.pop(context, value.trim()),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: colors.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.verified_user_outlined,
+                      size: 19,
+                      color: colors.primary,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'O app não guarda sua senha. O acesso é autorizado '
+                        'pelo Google e respeita as permissões da planilha.',
+                        style: TextStyle(
+                          color: colors.onSurfaceVariant,
+                          fontSize: 12,
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _controller.text.trim()),
+          child: const Text('Conectar'),
+        ),
+      ],
+    );
+  }
+}
+
+class _OnlineProjectStep extends StatelessWidget {
+  const _OnlineProjectStep({
+    required this.number,
+    required this.title,
+    required this.description,
+  });
+
+  final String number;
+  final String title;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 13),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 13,
+            backgroundColor: colors.primaryContainer,
+            foregroundColor: colors.primary,
+            child: Text(number, style: const TextStyle(fontSize: 12)),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  description,
+                  style: TextStyle(
+                    color: colors.onSurfaceVariant,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

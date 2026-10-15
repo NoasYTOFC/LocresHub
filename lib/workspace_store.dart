@@ -6,7 +6,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'locres_codec.dart';
 
-enum WorkspaceSourceType { locres, csv }
+enum WorkspaceSourceType { locres, csv, online }
 
 class LocresWorkspaceTab {
   LocresWorkspaceTab({
@@ -32,7 +32,13 @@ class LocresWorkspaceTab {
   Map<int, String> savedEdits;
   final Set<String> finalizedNamespaces;
 
-  String get fileName => path.split(Platform.pathSeparator).last;
+  bool get isOnline => sourceType == WorkspaceSourceType.online;
+
+  /// Last known remote "edited" value per entry id; used to detect conflicts.
+  Map<String, String> remoteBase = {};
+
+  String get fileName =>
+      isOnline ? 'Planilha online' : path.split(Platform.pathSeparator).last;
 
   Map<int, String> get currentEdits {
     final edits = <int, String>{};
@@ -194,14 +200,15 @@ class WorkspaceStore {
     }
     final directory = await _getDirectory();
     await directory.create(recursive: true);
+    final localTabs = tabs.where((tab) => !tab.isOnline).toList();
     final data = <String, Object?>{
       'schemaVersion': 1,
-      'activePath': activeTab?.path,
+      'activePath': (activeTab?.isOnline ?? false) ? null : activeTab?.path,
       'themeMode': themeMode.name,
-      'tabs': tabs.map(_writeTab).toList(),
+      'tabs': localTabs.map(_writeTab).toList(),
       'knownFiles':
           (knownFiles.isEmpty
-                  ? tabs
+                  ? localTabs
                         .map(
                           (tab) => SavedLocresMetadata(
                             path: tab.path,
